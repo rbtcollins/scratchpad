@@ -9,6 +9,9 @@
 {-# LANGUAGE TypeFamilies               #-}
 
 module Auth (
+    lpoauth,
+    maybeToken,
+    migrateAll,
     ) where
 
 
@@ -98,15 +101,6 @@ maybeToken =  do
         return $ trace ("authorized token " ++ safeShowCreds access_token) (Just access_token)
     Access token -> return (Just token)
 
-main :: IO ()
-main = do
-    runSqlite serverFile $ runMigration migrateAll
-    Just access_token <- maybeToken
-    req <- liftIO $ parseUrl "https://api.launchpad.net/devel/tripleo/+bug/1302040"
-    req2 <- liftIO $ OA.signOAuth lpoauth access_token req
-    person_response <- liftIO $ withManager $ \manager -> httpLbs req2 manager
-    print $ responseBody person_response
-
 untilAuthorized :: (MonadIO m, Ord a, Num a)
                 => Manager
                 -> OA.OAuth
@@ -114,7 +108,9 @@ untilAuthorized :: (MonadIO m, Ord a, Num a)
                 -> a
                 -> m OA.Credential
 untilAuthorized manager lpoauth temp_creds tries = do
-    maybe_access_token <- OA.getAccessTokenWith $ (OA.defaultAccessTokenRequest lpoauth temp_creds manager) { OA.accessTokenAddAuth = OA.addAuthBody }
+    maybe_access_token <- OA.getAccessTokenWith $ (OA.defaultAccessTokenRequest lpoauth temp_creds manager) {
+        OA.accessTokenAddAuth = OA.addAuthBody
+        , OA.accessTokenRequestHook = \req -> req { checkStatus = checkFor401 }}
     case maybe_access_token of
       Left error_response -> if tries > 0 then do
         liftIO $ threadDelay 1000000 -- Don't spam the server.
